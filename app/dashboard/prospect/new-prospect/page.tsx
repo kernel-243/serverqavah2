@@ -49,18 +49,14 @@ const formSchema = z.object({
   }),
   status: z.enum(["prospect", "client", "annuler"]).default("prospect"),
   categorie: z.enum(["Normal", "1000 jeunes", "Autre"]).default("Normal"),
-  dateNaissance: z.date().optional().nullable(),
+  prospectPlusDe18Ans: z.boolean().default(false),
 }).superRefine((data, ctx) => {
-  if (data.categorie === "1000 jeunes") {
-    if (!data.dateNaissance) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["dateNaissance"], message: "La date de naissance est requise pour la catégorie 1000 jeunes" })
-      return
-    }
-    const today = new Date()
-    const age = today.getFullYear() - data.dateNaissance.getFullYear() -
-      (today < new Date(today.getFullYear(), data.dateNaissance.getMonth(), data.dateNaissance.getDate()) ? 1 : 0)
-    if (age < 18) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["dateNaissance"], message: "Le prospect doit avoir au moins 18 ans pour la catégorie 1000 jeunes" })
-    if (age > 28) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["dateNaissance"], message: "Le prospect doit avoir au maximum 28 ans pour la catégorie 1000 jeunes" })
+  if (data.categorie === "1000 jeunes" && !data.prospectPlusDe18Ans) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["prospectPlusDe18Ans"],
+      message: "Le prospect doit avoir plus de 18 ans pour la catégorie 1000 jeunes",
+    })
   }
 })
 
@@ -102,7 +98,7 @@ export default function NewProspectPage() {
       dateRappel: new Date(),
       status: "prospect",
       categorie: "Normal",
-      dateNaissance: null,
+      prospectPlusDe18Ans: false,
     },
   })
 
@@ -436,72 +432,35 @@ export default function NewProspectPage() {
                   </Select>
                 </div>
 
-                {/* Date de naissance — visible uniquement pour la catégorie 1000 jeunes */}
+                {/* Validation âge 1000 jeunes */}
                 {form.watch("categorie") === "1000 jeunes" && (
                   <div className="space-y-2">
-                    <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                      Date de naissance <span className="text-red-500">*</span>
-                      <span className="ml-2 text-xs text-slate-500 font-normal">(18 à 28 ans requis)</span>
-                    </Label>
+                    <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">Validation âge</Label>
                     <Controller
-                      name="dateNaissance"
+                      name="prospectPlusDe18Ans"
                       control={form.control}
                       render={({ field }) => {
-                        const today = new Date()
-                        const maxDate = new Date(today.getFullYear() - 18, today.getMonth(), today.getDate())
-                        const minDate = new Date(today.getFullYear() - 28, today.getMonth(), today.getDate())
-                        const age = field.value
-                          ? (() => {
-                              const a = today.getFullYear() - field.value.getFullYear() -
-                                (today < new Date(today.getFullYear(), field.value.getMonth(), field.value.getDate()) ? 1 : 0)
-                              return a
-                            })()
-                          : null
-                        const ageInvalid = age !== null && (age < 18 || age > 28)
                         return (
-                          <div className="space-y-1">
-                            <Popover>
-                              <PopoverTrigger asChild>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  className={cn(
-                                    "w-full justify-start text-left font-normal border-slate-200 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-600",
-                                    !field.value && "text-muted-foreground",
-                                    ageInvalid && "border-red-400"
-                                  )}
-                                >
-                                  <CalendarIcon className="mr-2 h-4 w-4" />
-                                  {field.value ? format(field.value, "dd MMMM yyyy", { locale: fr }) : "Sélectionnez la date de naissance"}
-                                  {age !== null && !ageInvalid && <span className="ml-auto text-xs text-green-600 font-medium">{age} ans</span>}
-                                </Button>
-                              </PopoverTrigger>
-                              <PopoverContent className="w-auto p-0 dark:bg-slate-800 dark:border-slate-700">
-                                <Calendar
-                                  mode="single"
-                                  selected={field.value ?? undefined}
-                                  onSelect={field.onChange}
-                                  defaultMonth={maxDate}
-                                  fromDate={minDate}
-                                  toDate={maxDate}
-                                  initialFocus
-                                  locale={fr}
-                                />
-                              </PopoverContent>
-                            </Popover>
-                            {ageInvalid && (
-                              <p className="text-xs text-red-500">
-                                {age! < 18
-                                  ? `Âge insuffisant (${age} ans) — minimum 18 ans requis pour la catégorie 1000 jeunes.`
-                                  : `Âge dépassé (${age} ans) — maximum 28 ans pour la catégorie 1000 jeunes.`}
+                          <div className="flex items-start gap-3 rounded-md border border-slate-200 dark:border-slate-600 px-3 py-2">
+                            <Checkbox
+                              checked={field.value}
+                              onCheckedChange={(checked) => field.onChange(Boolean(checked))}
+                              className="mt-0.5 border-slate-400 dark:border-slate-500"
+                            />
+                            <div className="space-y-1">
+                              <p className="text-sm text-slate-700 dark:text-slate-300">
+                                Prospect a plus de 18 ans <span className="text-red-500">*</span>
                               </p>
-                            )}
+                              <p className="text-xs text-slate-500 dark:text-slate-400">
+                                Ce champ doit être coché pour enregistrer un prospect de catégorie 1000 jeunes.
+                              </p>
+                            </div>
                           </div>
                         )
                       }}
                     />
-                    {form.formState.errors.dateNaissance && (
-                      <p className="text-sm text-red-500">{form.formState.errors.dateNaissance.message as string}</p>
+                    {form.formState.errors.prospectPlusDe18Ans && (
+                      <p className="text-sm text-red-500">{form.formState.errors.prospectPlusDe18Ans.message as string}</p>
                     )}
                   </div>
                 )}

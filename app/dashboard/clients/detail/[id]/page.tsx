@@ -33,7 +33,6 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { formatDateOnly } from "@/lib/utils"
 import { AIRewriteButton } from "@/components/ai-rewrite-button"
 import { VoiceInputButton } from "@/components/voice-input-button"
-
 interface Client {
   _id: string
   code: string
@@ -48,7 +47,7 @@ interface Client {
   commune: string
   quartier: string
   adresse: string
-  numero: string  
+  numero: string
   email: string
   email2: string
   indicatif: string
@@ -60,6 +59,7 @@ interface Client {
   revenuMensuel: number
   situationMatrimoniale: string
   nombreEnfants: number
+  categorie?: string
   conjoint?: {
     nom: string
     prenom: string
@@ -185,9 +185,10 @@ interface Client {
   factures?: Array<{
     _id: string
     code: string
-    contratId: {
+    contratId?: {
       code: string
-    }
+    } | null
+    type?: string
     somme: number
     devise: string
     methode: string
@@ -259,6 +260,25 @@ export default function ClientDetailPage() {
   const [manualCCEmails, setManualCCEmails] = useState<string>("")
   const [messageSubject, setMessageSubject] = useState<string>("")
   const { toast } = useToast()
+
+  // États module 1000 Jeunes
+  const [balance1000, setBalance1000] = useState<{
+    montantTotal: number
+    totalPaye: number
+    montantRestant: number
+    factures: Array<{ _id: string; code: string; somme: number; devise: string; methode: string; date: string }>
+  } | null>(null)
+  const [isLoadingBalance1000, setIsLoadingBalance1000] = useState(false)
+  const [isPaiement1000DialogOpen, setIsPaiement1000DialogOpen] = useState(false)
+  const [paiement1000Form, setPaiement1000Form] = useState({
+    somme: "",
+    devise: "USD",
+    methode: "cash",
+    date: new Date().toISOString().split("T")[0],
+    sendToClient: false,
+  })
+  const [isSubmitting1000, setIsSubmitting1000] = useState(false)
+  const [downloading1000FactureCode, setDownloading1000FactureCode] = useState<string | null>(null)
 
   const {
     register,
@@ -338,6 +358,89 @@ export default function ClientDetailPage() {
 
     fetchClientDetails()
   }, [id, toast, reset])
+
+  const fetchBalance1000Jeunes = async () => {
+    if (!id) return
+    setIsLoadingBalance1000(true)
+    try {
+      const token = localStorage.getItem("authToken")
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/factures/1000-jeunes/${id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      setBalance1000(res.data)
+    } catch (err) {
+      console.error("Erreur chargement solde 1000 jeunes:", err)
+    } finally {
+      setIsLoadingBalance1000(false)
+    }
+  }
+
+  useEffect(() => {
+    if (client?.categorie === "1000 jeunes") {
+      fetchBalance1000Jeunes()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client?.categorie, id])
+
+  const handlePaiement1000Submit = async () => {
+    if (!paiement1000Form.somme) {
+      toast({ title: "Erreur", description: "Veuillez saisir un montant.", variant: "destructive" })
+      return
+    }
+    setIsSubmitting1000(true)
+    try {
+      const token = localStorage.getItem("authToken")
+      await axios.post(
+        `${process.env.NEXT_PUBLIC_API_URL}/factures/1000-jeunes`,
+        { clientId: id, ...paiement1000Form },
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+
+      const successMsg = paiement1000Form.sendToClient && client?.email
+        ? "Paiement enregistré. Le reçu a été envoyé par e-mail au client."
+        : "Paiement 1000 Jeunes enregistré avec succès."
+
+      toast({ title: "Succès", description: successMsg })
+      setIsPaiement1000DialogOpen(false)
+      setPaiement1000Form({ somme: "", devise: "USD", methode: "cash", date: new Date().toISOString().split("T")[0], sendToClient: false })
+      await fetchBalance1000Jeunes()
+    } catch (err) {
+      const msg = axios.isAxiosError(err) ? err.response?.data?.message || "Erreur lors du paiement." : "Erreur lors du paiement."
+      toast({ title: "Erreur", description: msg, variant: "destructive" })
+    } finally {
+      setIsSubmitting1000(false)
+    }
+  }
+
+  const handleDownloadFacture1000 = async (factureCode: string) => {
+    setDownloading1000FactureCode(factureCode)
+    try {
+      const token = localStorage.getItem("authToken")
+      const response = await axios.get(`${process.env.NEXT_PUBLIC_API_URL}/factures/download/${factureCode}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: "blob",
+      })
+      const blob = new Blob([response.data], { type: response.headers["content-type"] })
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.style.display = "none"
+      a.href = url
+      a.download = `Quittance_${factureCode}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      toast({ title: "Téléchargement réussi", description: "La quittance a été téléchargée." })
+    } catch (error) {
+      console.error("Erreur lors du téléchargement de la facture:", error)
+      toast({
+        title: "Erreur de téléchargement de la facture",
+        description: error instanceof Error ? error.message : "Une erreur inattendue s'est produite.",
+        variant: "destructive",
+      })
+    } finally {
+      setDownloading1000FactureCode(null)
+    }
+  }
 
   // Debug: Log when isAssignDialogOpen changes
   useEffect(() => {
@@ -590,13 +693,16 @@ export default function ClientDetailPage() {
                 <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-gray-100 dark:to-gray-400 bg-clip-text text-transparent">
                   {client.prenom} {client.nom}
                 </h1>
-                <div className="flex items-center gap-4 mt-1">
+                <div className="flex items-center gap-4 mt-1 flex-wrap">
                   <Badge variant="secondary" className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400">
                     Code: {client.code}
                   </Badge>
                   <Badge variant={client.sexe === 'M' ? 'default' : 'secondary'} className={client.sexe === 'M' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' : 'bg-pink-100 text-pink-800 dark:bg-pink-900/30 dark:text-pink-400'}>
                     {client.sexe === 'M' ? 'Masculin' : 'Féminin'}
                   </Badge>
+                  {client.categorie === '1000 jeunes' && (
+                    <Badge className="bg-yellow-500 text-white">1000 Jeunes</Badge>
+                  )}
                 </div>
               </div>
             </div>
@@ -636,6 +742,124 @@ export default function ClientDetailPage() {
             </div>
           </div>
         </div>
+
+        {/* Section Solde 1000 Jeunes */}
+        {client.categorie === "1000 jeunes" && (
+          <div className="bg-gradient-to-r from-yellow-50 to-amber-50 dark:from-yellow-950/30 dark:to-amber-950/30 rounded-2xl shadow-sm border border-yellow-200 dark:border-yellow-800 p-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-yellow-500 flex items-center justify-center text-white font-bold text-sm">1K</div>
+                <div>
+                  <h2 className="text-xl font-bold text-yellow-900 dark:text-yellow-100">Programme 1000 Jeunes</h2>
+                  <Badge className="bg-yellow-500 text-white text-xs mt-1">Catégorie 1000 Jeunes</Badge>
+                </div>
+              </div>
+              <Button
+                onClick={() => setIsPaiement1000DialogOpen(true)}
+                className="bg-yellow-500 hover:bg-yellow-600 text-white"
+              >
+                <Icons.plus className="h-4 w-4 mr-2" />
+                Nouveau paiement 1000 Jeunes
+              </Button>
+            </div>
+
+            {isLoadingBalance1000 ? (
+              <div className="flex justify-center py-4">
+                <Icons.spinner className="h-6 w-6 animate-spin text-yellow-500" />
+              </div>
+            ) : balance1000 ? (
+              <>
+                {/* Cartes de solde */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+                  <Card className="border-0 shadow-sm bg-white dark:bg-slate-800">
+                    <CardContent className="p-4 text-center">
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Montant total</p>
+                      <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{balance1000.montantTotal.toLocaleString()} $</p>
+                    </CardContent>
+                  </Card>
+                  <Card className="border-0 shadow-sm bg-white dark:bg-slate-800">
+                    <CardContent className="p-4 text-center">
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Total payé</p>
+                      <p className="text-2xl font-bold text-green-600 dark:text-green-400">{balance1000.totalPaye.toLocaleString()} $</p>
+                    </CardContent>
+                  </Card>
+                  <Card className="border-0 shadow-sm bg-white dark:bg-slate-800">
+                    <CardContent className="p-4 text-center">
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Montant restant</p>
+                      <p className={`text-2xl font-bold ${balance1000.montantRestant > 0 ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}`}>
+                        {balance1000.montantRestant.toLocaleString()} $
+                      </p>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {/* Barre de progression */}
+                <div className="mb-6">
+                  <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400 mb-1">
+                    <span>Progression du paiement</span>
+                    <span>{balance1000.montantTotal > 0 ? Math.round((balance1000.totalPaye / balance1000.montantTotal) * 100) : 0}%</span>
+                  </div>
+                  <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
+                    <div
+                      className="bg-yellow-500 h-3 rounded-full transition-all duration-500"
+                      style={{ width: `${balance1000.montantTotal > 0 ? Math.min(100, (balance1000.totalPaye / balance1000.montantTotal) * 100) : 0}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Historique des paiements */}
+                {balance1000.factures.length > 0 ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Référence</TableHead>
+                        <TableHead>Montant</TableHead>
+                        <TableHead>Devise</TableHead>
+                        <TableHead>Méthode</TableHead>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Reçu</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {balance1000.factures.map((f) => (
+                        <TableRow key={f._id}>
+                          <TableCell className="font-mono text-xs">{f.code}</TableCell>
+                          <TableCell className="font-semibold">{(f.somme || 0).toLocaleString()}</TableCell>
+                          <TableCell>{f.devise}</TableCell>
+                          <TableCell>{f.methode}</TableCell>
+                          <TableCell>{new Date(f.date).toLocaleDateString("fr-FR")}</TableCell>
+                          <TableCell>
+                            <Button
+                              variant="link"
+                              size="sm"
+                              disabled={downloading1000FactureCode === f.code}
+                              className="min-w-[2.5rem]"
+                              onClick={() => handleDownloadFacture1000(f.code)}
+                              aria-busy={downloading1000FactureCode === f.code}
+                              aria-label={
+                                downloading1000FactureCode === f.code
+                                  ? "Téléchargement du reçu en cours"
+                                  : `Télécharger le reçu ${f.code}`
+                              }
+                            >
+                              {downloading1000FactureCode === f.code ? (
+                                <Icons.spinner className="h-4 w-4 animate-spin text-yellow-600 dark:text-yellow-400" />
+                              ) : (
+                                <Icons.download className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">Aucun paiement 1000 Jeunes enregistré pour ce client.</p>
+                )}
+              </>
+            ) : null}
+          </div>
+        )}
 
         {/* Tabs Section */}
         <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-700 overflow-hidden">
@@ -1253,7 +1477,7 @@ export default function ClientDetailPage() {
                         {client.factures?.map((facture) => (
                           <TableRow key={facture._id}>
                             <TableCell>{facture.code}</TableCell>
-                            <TableCell>{facture.contratId.code}</TableCell>
+                            <TableCell>{facture.type === "1000_jeunes" ? "1000 Jeunes" : (facture.contratId?.code ?? "—")}</TableCell>
                             <TableCell>{(facture.somme || 0).toLocaleString()}</TableCell>
                             <TableCell>{facture.devise}</TableCell>
                             <TableCell>{facture.methode}</TableCell>
@@ -1469,6 +1693,87 @@ export default function ClientDetailPage() {
             </TabsContent>
           </Tabs>
         </div>
+
+        {/* Dialog Paiement 1000 Jeunes */}
+        <Dialog open={isPaiement1000DialogOpen} onOpenChange={setIsPaiement1000DialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Paiement 1000 Jeunes</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              {balance1000 && (
+                <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 text-sm">
+                  <p className="text-yellow-800 dark:text-yellow-200">
+                    Solde restant : <strong>{balance1000.montantRestant.toLocaleString()} $</strong>
+                  </p>
+                </div>
+              )}
+              <div className="space-y-1">
+                <Label htmlFor="pmt1000-somme">Montant <span className="text-red-500">*</span></Label>
+                <Input
+                  id="pmt1000-somme"
+                  type="number"
+                  min="1"
+                  placeholder="Ex: 500"
+                  value={paiement1000Form.somme}
+                  onChange={(e) => setPaiement1000Form((f) => ({ ...f, somme: e.target.value }))}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label>Devise</Label>
+                  <Select value={paiement1000Form.devise} onValueChange={(v) => setPaiement1000Form((f) => ({ ...f, devise: v }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="USD">USD</SelectItem>
+                      <SelectItem value="EUR">EUR</SelectItem>
+                      <SelectItem value="CDF">CDF</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label>Méthode</Label>
+                  <Select value={paiement1000Form.methode} onValueChange={(v) => setPaiement1000Form((f) => ({ ...f, methode: v }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cash">Cash</SelectItem>
+                      <SelectItem value="bank">Virement bancaire</SelectItem>
+                      <SelectItem value="mobile">Mobile money</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="pmt1000-date">Date</Label>
+                <Input
+                  id="pmt1000-date"
+                  type="date"
+                  value={paiement1000Form.date}
+                  onChange={(e) => setPaiement1000Form((f) => ({ ...f, date: e.target.value }))}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  id="pmt1000-send"
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-gray-300"
+                  checked={paiement1000Form.sendToClient}
+                  onChange={(e) => setPaiement1000Form((f) => ({ ...f, sendToClient: e.target.checked }))}
+                />
+                <Label htmlFor="pmt1000-send" className="cursor-pointer">Notifier le client par email (reçu PDF)</Label>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsPaiement1000DialogOpen(false)} disabled={isSubmitting1000}>
+                Annuler
+              </Button>
+              <Button onClick={handlePaiement1000Submit} disabled={isSubmitting1000} className="bg-yellow-500 hover:bg-yellow-600 text-white">
+                {isSubmitting1000 ? <Icons.spinner className="h-4 w-4 animate-spin mr-2" /> : null}
+                Enregistrer le paiement
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <Dialog open={isErrorDialogOpen} onOpenChange={setIsErrorDialogOpen}>
           <DialogContent>

@@ -88,17 +88,14 @@ const formSchema = z.object({
   dateVisiteTerrain: z.date().optional().nullable(),
   status: z.enum(["prospect", "client", "annuler"]).default("prospect"),
   categorie: z.enum(["Normal", "1000 jeunes", "Autre"]).default("Normal"),
+  prospectPlusDe18Ans: z.boolean().default(false),
 }).superRefine((data, ctx) => {
-  if (data.categorie === "1000 jeunes") {
-    if (!data.dateNaissance) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["dateNaissance"], message: "La date de naissance est requise pour la catégorie 1000 jeunes" })
-      return
-    }
-    const today = new Date()
-    const age = today.getFullYear() - data.dateNaissance.getFullYear() -
-      (today < new Date(today.getFullYear(), data.dateNaissance.getMonth(), data.dateNaissance.getDate()) ? 1 : 0)
-    if (age < 18) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["dateNaissance"], message: "Le prospect doit avoir au moins 18 ans pour la catégorie 1000 jeunes" })
-    if (age > 28) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["dateNaissance"], message: "Le prospect doit avoir au maximum 28 ans pour la catégorie 1000 jeunes" })
+  if (data.categorie === "1000 jeunes" && !data.prospectPlusDe18Ans) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["prospectPlusDe18Ans"],
+      message: "Le prospect doit avoir plus de 18 ans pour la catégorie 1000 jeunes",
+    })
   }
 })
 
@@ -167,6 +164,7 @@ export default function EditProspectPage() {
       anneeConstruction: 0,
       status: "prospect",
       categorie: "Normal",
+      prospectPlusDe18Ans: false,
     },
   })
 
@@ -235,6 +233,8 @@ export default function EditProspectPage() {
           prixVente: prospectData.prixVente ?? 0,
           montantImpaye: prospectData.montantImpaye ?? 0,
           anneeConstruction: prospectData.anneeConstruction ?? 0,
+          // Prospect 1000 jeunes existant → checkbox déjà validée
+          prospectPlusDe18Ans: prospectData.categorie === "1000 jeunes",
         })
       } catch (error) {
         if (axios.isAxiosError(error)) {
@@ -576,61 +576,34 @@ export default function EditProspectPage() {
                   </Select>
                 </div>
 
-                {/* Date de naissance — visible uniquement pour la catégorie 1000 jeunes */}
+                {/* Validation âge — visible uniquement pour la catégorie 1000 jeunes */}
                 {form.watch("categorie") === "1000 jeunes" && (
                   <div className="space-y-2">
-                    <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                      Date de naissance <span className="text-red-500">*</span>
-                      <span className="ml-2 text-xs text-slate-500 font-normal">(18 à 28 ans requis)</span>
-                    </Label>
+                    <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">Validation âge</Label>
                     <Controller
-                      name="dateNaissance"
+                      name="prospectPlusDe18Ans"
                       control={form.control}
-                      render={({ field }) => {
-                        const today = new Date()
-                        const maxDate = new Date(today.getFullYear() - 18, today.getMonth(), today.getDate())
-                        const minDate = new Date(today.getFullYear() - 28, today.getMonth(), today.getDate())
-                        const age = field.value
-                          ? today.getFullYear() - field.value.getFullYear() -
-                            (today < new Date(today.getFullYear(), field.value.getMonth(), field.value.getDate()) ? 1 : 0)
-                          : null
-                        const ageInvalid = age !== null && (age < 18 || age > 28)
-                        return (
+                      render={({ field }) => (
+                        <div className="flex items-start gap-3 rounded-md border border-slate-200 dark:border-slate-600 px-3 py-2">
+                          <Checkbox
+                            checked={field.value}
+                            onCheckedChange={(checked) => field.onChange(Boolean(checked))}
+                            className="mt-0.5 border-slate-400 dark:border-slate-500"
+                          />
                           <div className="space-y-1">
-                            <Popover>
-                              <PopoverTrigger asChild>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  className={cn(
-                                    "w-full justify-start text-left font-normal border-slate-200 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-600",
-                                    !field.value && "text-muted-foreground",
-                                    ageInvalid && "border-red-400"
-                                  )}
-                                >
-                                  <CalendarIcon className="mr-2 h-4 w-4" />
-                                  {field.value ? format(field.value, "dd MMMM yyyy", { locale: fr }) : "Sélectionnez la date de naissance"}
-                                  {age !== null && !ageInvalid && <span className="ml-auto text-xs text-green-600 font-medium">{age} ans</span>}
-                                </Button>
-                              </PopoverTrigger>
-                              <PopoverContent className="w-auto p-0 dark:bg-slate-800 dark:border-slate-700">
-                                <Calendar mode="single" selected={field.value ?? undefined} onSelect={field.onChange} defaultMonth={maxDate} fromDate={minDate} toDate={maxDate} initialFocus locale={fr} />
-                              </PopoverContent>
-                            </Popover>
-                            {ageInvalid && (
-                              <p className="text-xs text-red-500">
-                                {age! < 18
-                                  ? `Âge insuffisant (${age} ans) — minimum 18 ans requis pour la catégorie 1000 jeunes.`
-                                  : `Âge dépassé (${age} ans) — maximum 28 ans pour la catégorie 1000 jeunes.`}
-                              </p>
-                            )}
-                            {form.formState.errors.dateNaissance && (
-                              <p className="text-xs text-red-500">{form.formState.errors.dateNaissance.message as string}</p>
-                            )}
+                            <p className="text-sm text-slate-700 dark:text-slate-300">
+                              Prospect a plus de 18 ans <span className="text-red-500">*</span>
+                            </p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                              Ce champ doit être coché pour enregistrer un prospect de catégorie 1000 jeunes.
+                            </p>
                           </div>
-                        )
-                      }}
+                        </div>
+                      )}
                     />
+                    {form.formState.errors.prospectPlusDe18Ans && (
+                      <p className="text-sm text-red-500">{form.formState.errors.prospectPlusDe18Ans.message as string}</p>
+                    )}
                   </div>
                 )}
 
@@ -811,30 +784,32 @@ export default function EditProspectPage() {
                         </div>
                       </div>
 
-                      {/* Date de naissance */}
-                      <div className="space-y-2">
-                        <Label htmlFor="dateNaissance" className="text-sm font-medium text-slate-700 dark:text-slate-300">Date de naissance</Label>
-                        <Popover>
-                          <PopoverTrigger asChild>
-                            <Button variant={"outline"} className="w-full justify-start text-left font-normal border-slate-200 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200">
-                              <CalendarIcon className="mr-2 h-4 w-4" />
-                              {form.watch("dateNaissance") ? (
-                                format(form.watch("dateNaissance") as Date, "PPP", { locale: fr })
-                              ) : (
-                                <span className="text-slate-500 dark:text-slate-400">Sélectionnez une date</span>
-                              )}
-                            </Button>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-auto p-0 dark:bg-slate-800 dark:border-slate-700">
-                            <Calendar
-                              mode="single"
-                              selected={form.watch("dateNaissance") as Date | undefined}
-                              onSelect={(date) => form.setValue("dateNaissance", date)}
-                              initialFocus
-                            />
-                          </PopoverContent>
-                        </Popover>
-                      </div>
+                      {/* Date de naissance — masquée pour la catégorie 1000 jeunes (le checkbox suffit) */}
+                      {form.watch("categorie") !== "1000 jeunes" && (
+                        <div className="space-y-2">
+                          <Label htmlFor="dateNaissance" className="text-sm font-medium text-slate-700 dark:text-slate-300">Date de naissance</Label>
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <Button variant={"outline"} className="w-full justify-start text-left font-normal border-slate-200 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200">
+                                <CalendarIcon className="mr-2 h-4 w-4" />
+                                {form.watch("dateNaissance") ? (
+                                  format(form.watch("dateNaissance") as Date, "PPP", { locale: fr })
+                                ) : (
+                                  <span className="text-slate-500 dark:text-slate-400">Sélectionnez une date</span>
+                                )}
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-auto p-0 dark:bg-slate-800 dark:border-slate-700">
+                              <Calendar
+                                mode="single"
+                                selected={form.watch("dateNaissance") as Date | undefined}
+                                onSelect={(date) => form.setValue("dateNaissance", date)}
+                                initialFocus
+                              />
+                            </PopoverContent>
+                          </Popover>
+                        </div>
+                      )}
 
                       {/* Résidence */}
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

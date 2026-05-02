@@ -8,9 +8,21 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
-import { BarChart3, Loader2, Users, CheckCircle2, AlertCircle, Calendar, Clock, Shield, Eye, EyeOff } from "lucide-react"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible"
+import { Separator } from "@/components/ui/separator"
+import {
+  BarChart3, Loader2, Users, CheckCircle2, AlertCircle, Calendar,
+  Clock, Shield, Eye, EyeOff, Download, ChevronDown, FileSpreadsheet,
+} from "lucide-react"
 import axios from "axios"
 import { toast } from "sonner"
+import * as XLSX from "xlsx"
 
 interface Employee {
   _id: string
@@ -28,6 +40,7 @@ interface PresenceRecord {
   heureEntree?: string
   heureSortie?: string
   statut: string
+  type?: string
 }
 
 interface EmployeeStat {
@@ -69,6 +82,16 @@ function tauxPresence(presents: number, total: number) {
   return Math.round((presents / total) * 100)
 }
 
+const STATUT_LABELS: Record<string, { label: string; color: string }> = {
+  present:    { label: "Présent",  color: "text-green-600" },
+  retard:     { label: "Retard",   color: "text-yellow-600" },
+  absent:     { label: "Absent",   color: "text-red-600" },
+  conge:      { label: "Congé",    color: "text-blue-600" },
+  maladie:    { label: "Maladie",  color: "text-purple-600" },
+  ferie:      { label: "Férié",    color: "text-gray-600" },
+  non_defini: { label: "—",        color: "text-gray-400" },
+}
+
 export default function StatistiquesPage() {
   const [currentUser, setCurrentUser] = useState<Employee | null>(null)
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null)
@@ -79,9 +102,19 @@ export default function StatistiquesPage() {
     endDate: new Date().toISOString().slice(0, 10),
   })
 
-  // Gestion des accès (admin only)
+  // Accès (admin only)
   const [agents, setAgents] = useState<Employee[]>([])
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [visibiliteOpen, setVisibiliteOpen] = useState(false)
+
+  // Dialog employé
+  const [selectedStat, setSelectedStat] = useState<EmployeeStat | null>(null)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [employeePresences, setEmployeePresences] = useState<PresenceRecord[]>([])
+  const [loadingPresences, setLoadingPresences] = useState(false)
+
+  // Export
+  const [isExportingAll, setIsExportingAll] = useState(false)
 
   const token = typeof window !== "undefined" ? localStorage.getItem("authToken") : null
   const headers = { Authorization: `Bearer ${token}` }
@@ -96,7 +129,6 @@ export default function StatistiquesPage() {
       const admin = me.role === "Admin"
       setIsAdmin(admin)
 
-      // Agents autorisés : admin OU agent avec statistiquesRH.read
       const hasAccess = admin || me.permissions?.statistiquesRH?.read === true
       if (!hasAccess) {
         setLoading(false)
@@ -109,7 +141,6 @@ export default function StatistiquesPage() {
       })
       setStats(res.data.data)
 
-      // Charger la liste des agents pour le panneau admin
       if (admin) {
         const usersRes = await axios.get(`${api}/users`, { headers })
         setAgents((usersRes.data as Employee[]).filter((u: Employee) => u.role !== "Admin"))
@@ -148,6 +179,103 @@ export default function StatistiquesPage() {
     }
   }
 
+  async function handleEmployeeClick(stat: EmployeeStat) {
+    setSelectedStat(stat)
+    setDialogOpen(true)
+    setLoadingPresences(true)
+    setEmployeePresences([])
+    try {
+      const res = await axios.get(`${api}/presences`, {
+        headers,
+        params: {
+          userId: stat.employee._id,
+          startDate: filters.startDate,
+          endDate: filters.endDate,
+        },
+      })
+      const data = res.data?.data ?? res.data?.presences ?? res.data ?? []
+      setEmployeePresences(Array.isArray(data) ? data : [])
+    } catch {
+      // On affiche quand même le résumé sans les détails
+    } finally {
+      setLoadingPresences(false)
+    }
+  }
+
+  function exportEmployeeExcel(stat: EmployeeStat, presences: PresenceRecord[]) {
+    const wb = XLSX.utils.book_new()
+    const taux = stat.tauxPresence ?? tauxPresence(stat.presents, stat.total)
+
+    const summaryRows = [
+      ["Employé", stat.employee.nom],
+      ["Email", stat.employee.email],
+      ["Rôle", stat.employee.role],
+      ["Période", `${filters.startDate} → ${filters.endDate}`],
+      [],
+      ["Indicateur", "Valeur"],
+      ["Jours présents", stat.presents],
+      ["Retards", stat.retards],
+      ["Absences", stat.absents],
+      ["Congés", stat.conges],
+      ["Total jours travaillés", stat.total],
+      ["Taux de présence", `${taux}%`],
+    ]
+    const ws1 = XLSX.utils.aoa_to_sheet(summaryRows)
+    XLSX.utils.book_append_sheet(wb, ws1, "Résumé")
+
+    if (presences.length > 0) {
+      const detailRows = [
+        ["Date", "Heure d'entrée", "Heure de sortie", "Statut", "Type"],
+        ...presences.map(p => [
+          formatDate(p.date),
+          formatTime(p.heureEntree),
+          formatTime(p.heureSortie),
+          STATUT_LABELS[p.statut]?.label ?? p.statut,
+          p.type ?? "—",
+        ]),
+      ]
+      const ws2 = XLSX.utils.aoa_to_sheet(detailRows)
+      XLSX.utils.book_append_sheet(wb, ws2, "Présences détaillées")
+    }
+
+    XLSX.writeFile(wb, `stats_${stat.employee.nom.replace(/\s+/g, "_")}_${filters.startDate}_${filters.endDate}.xlsx`)
+    toast.success("Export Excel réussi")
+  }
+
+  function exportAllExcel() {
+    if (!stats) return
+    setIsExportingAll(true)
+    try {
+      const wb = XLSX.utils.book_new()
+
+      const rows = [
+        [`Statistiques de présence — Période : ${filters.startDate} → ${filters.endDate}`],
+        [],
+        ["Employé", "Email", "Rôle", "Présents", "Retards", "Absents", "Congés", "Total jours", "Taux (%)"],
+        ...stats.byEmployee.map(({ employee, presents, retards, absents, conges, total, tauxPresence: taux }) => [
+          employee.nom,
+          employee.email,
+          employee.role,
+          presents,
+          retards,
+          absents,
+          conges,
+          total,
+          taux ?? tauxPresence(presents, total),
+        ]),
+      ]
+
+      const ws = XLSX.utils.aoa_to_sheet(rows)
+      XLSX.utils.book_append_sheet(wb, ws, "Tous les employés")
+      XLSX.writeFile(wb, `stats_presence_${filters.startDate}_${filters.endDate}.xlsx`)
+      toast.success("Export Excel réussi")
+    } catch {
+      toast.error("Erreur lors de l'export")
+    } finally {
+      setIsExportingAll(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -180,64 +308,73 @@ export default function StatistiquesPage() {
         <p className="text-muted-foreground mt-1">Vue d&apos;ensemble des présences de tous les agents</p>
       </div>
 
-      {/* ── Panneau gestion des accès (admin uniquement) ── */}
+      {/* ── Panneau gestion des accès (admin uniquement) — dossier déroulant ── */}
       {isAdmin && (
-        <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/40 dark:bg-blue-900/10">
-          <CardHeader className="pb-3 pt-4">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2 text-blue-800 dark:text-blue-300">
-              <Eye className="h-4 w-4" />
-              Visibilité de cette page
-              <span className="text-xs font-normal text-blue-600/70 dark:text-blue-400/70 ml-1">
-                — Accordez l'accès à des employés spécifiques
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pb-4">
-            {agents.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Aucun agent trouvé.</p>
-            ) : (
-              <div className="flex flex-wrap gap-3">
-                {agents.map(agent => {
-                  const hasStatsAccess = agent.permissions?.statistiquesRH?.read === true
-                  const isToggling = togglingId === agent._id
-                  return (
-                    <div
-                      key={agent._id}
-                      className={`flex items-center gap-3 px-3 py-2 rounded-lg border transition-all ${
-                        hasStatsAccess
-                          ? "bg-blue-100 border-blue-300 dark:bg-blue-900/30 dark:border-blue-700"
-                          : "bg-white border-gray-200 dark:bg-slate-800 dark:border-slate-700"
-                      }`}
-                    >
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate max-w-[140px]">
-                          {agent.nom}
-                        </p>
-                        <p className="text-xs text-gray-400 truncate max-w-[140px]">{agent.email}</p>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {hasStatsAccess
-                          ? <Eye className="h-3.5 w-3.5 text-blue-500" />
-                          : <EyeOff className="h-3.5 w-3.5 text-gray-400" />
-                        }
-                        {isToggling
-                          ? <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
-                          : (
-                            <Switch
-                              checked={hasStatsAccess}
-                              onCheckedChange={() => toggleAccess(agent)}
-                              className="scale-90"
-                            />
-                          )
-                        }
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <Collapsible open={visibiliteOpen} onOpenChange={setVisibiliteOpen}>
+          <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/40 dark:bg-blue-900/10">
+            <CollapsibleTrigger asChild>
+              <CardHeader className="pb-3 pt-4 cursor-pointer select-none">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2 text-blue-800 dark:text-blue-300">
+                  <Eye className="h-4 w-4 shrink-0" />
+                  Visibilité de la page
+                  <span className="text-xs font-normal text-blue-600/70 dark:text-blue-400/70 ml-1">
+                    — Accordez l&apos;accès à des employés spécifiques
+                  </span>
+                  <ChevronDown
+                    className={`h-4 w-4 ml-auto text-blue-600/70 transition-transform duration-200 ${visibiliteOpen ? "rotate-180" : ""}`}
+                  />
+                </CardTitle>
+              </CardHeader>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <CardContent className="pb-4">
+                {agents.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Aucun agent trouvé.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-3">
+                    {agents.map(agent => {
+                      const hasStatsAccess = agent.permissions?.statistiquesRH?.read === true
+                      const isToggling = togglingId === agent._id
+                      return (
+                        <div
+                          key={agent._id}
+                          className={`flex items-center gap-3 px-3 py-2 rounded-lg border transition-all ${
+                            hasStatsAccess
+                              ? "bg-blue-100 border-blue-300 dark:bg-blue-900/30 dark:border-blue-700"
+                              : "bg-white border-gray-200 dark:bg-slate-800 dark:border-slate-700"
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate max-w-[140px]">
+                              {agent.nom}
+                            </p>
+                            <p className="text-xs text-gray-400 truncate max-w-[140px]">{agent.email}</p>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {hasStatsAccess
+                              ? <Eye className="h-3.5 w-3.5 text-blue-500" />
+                              : <EyeOff className="h-3.5 w-3.5 text-gray-400" />
+                            }
+                            {isToggling
+                              ? <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                              : (
+                                <Switch
+                                  checked={hasStatsAccess}
+                                  onCheckedChange={() => toggleAccess(agent)}
+                                  className="scale-90"
+                                />
+                              )
+                            }
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </CollapsibleContent>
+          </Card>
+        </Collapsible>
       )}
 
       {/* Filtres de période */}
@@ -311,8 +448,23 @@ export default function StatistiquesPage() {
 
       {/* Tableau par employé */}
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-base">Détail par employé</CardTitle>
+          {stats && stats.byEmployee.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              onClick={exportAllExcel}
+              disabled={isExportingAll}
+            >
+              {isExportingAll
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <FileSpreadsheet className="h-4 w-4 text-green-600" />
+              }
+              Exporter tous
+            </Button>
+          )}
         </CardHeader>
         <CardContent>
           {!stats || stats.byEmployee.length === 0 ? (
@@ -332,57 +484,178 @@ export default function StatistiquesPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {stats.byEmployee.map(({ employee, presents, retards, absents, conges, total, tauxPresence: taux, lastPresence }) => (
-                  <TableRow key={employee._id}>
-                    <TableCell>
-                      <div>
-                        <p className="font-medium">{employee.nom}</p>
-                        <p className="text-xs text-muted-foreground">{employee.email}</p>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="text-xs">{employee.role}</Badge>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <span className="font-medium text-green-600">{presents}</span>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <span className="font-medium text-yellow-600">{retards}</span>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <span className="font-medium text-red-600">{absents}</span>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <span className="font-medium text-blue-600">{conges}</span>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <div className="flex items-center justify-center gap-2">
-                        <div className="w-16 bg-gray-200 rounded-full h-1.5">
-                          <div
-                            className="bg-green-500 h-1.5 rounded-full"
-                            style={{ width: `${taux ?? tauxPresence(presents, total)}%` }}
-                          />
-                        </div>
-                        <span className="text-xs font-medium">{taux ?? tauxPresence(presents, total)}%</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {lastPresence ? (
+                {stats.byEmployee.map((stat) => {
+                  const { employee, presents, retards, absents, conges, total, tauxPresence: taux, lastPresence } = stat
+                  return (
+                    <TableRow
+                      key={employee._id}
+                      className="cursor-pointer hover:bg-muted/60 transition-colors"
+                      onClick={() => handleEmployeeClick(stat)}
+                    >
+                      <TableCell>
                         <div>
-                          <p>{formatDate(lastPresence.date)}</p>
-                          <p className="text-xs text-muted-foreground">{formatTime(lastPresence.heureEntree)}</p>
+                          <p className="font-medium">{employee.nom}</p>
+                          <p className="text-xs text-muted-foreground">{employee.email}</p>
                         </div>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-xs">{employee.role}</Badge>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <span className="font-medium text-green-600">{presents}</span>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <span className="font-medium text-yellow-600">{retards}</span>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <span className="font-medium text-red-600">{absents}</span>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <span className="font-medium text-blue-600">{conges}</span>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          <div className="w-16 bg-gray-200 rounded-full h-1.5">
+                            <div
+                              className="bg-green-500 h-1.5 rounded-full"
+                              style={{ width: `${taux ?? tauxPresence(presents, total)}%` }}
+                            />
+                          </div>
+                          <span className="text-xs font-medium">{taux ?? tauxPresence(presents, total)}%</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {lastPresence ? (
+                          <div>
+                            <p>{formatDate(lastPresence.date)}</p>
+                            <p className="text-xs text-muted-foreground">{formatTime(lastPresence.heureEntree)}</p>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           )}
         </CardContent>
       </Card>
+
+      {/* ── Dialog détails employé ── */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          {selectedStat && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 text-lg">
+                  <div className="h-9 w-9 rounded-full bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center text-blue-600 font-bold text-sm shrink-0">
+                    {selectedStat.employee.nom.charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <span>{selectedStat.employee.nom}</span>
+                    <Badge variant="outline" className="ml-2 text-xs font-normal">{selectedStat.employee.role}</Badge>
+                  </div>
+                </DialogTitle>
+                <p className="text-xs text-muted-foreground pt-0.5">{selectedStat.employee.email}</p>
+              </DialogHeader>
+
+              <Separator />
+
+              {/* Résumé stats */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { label: "Présents",  value: selectedStat.presents, color: "text-green-600",  bg: "bg-green-50 dark:bg-green-900/20",  icon: CheckCircle2 },
+                  { label: "Retards",   value: selectedStat.retards,  color: "text-yellow-600", bg: "bg-yellow-50 dark:bg-yellow-900/20", icon: Clock },
+                  { label: "Absents",   value: selectedStat.absents,  color: "text-red-600",    bg: "bg-red-50 dark:bg-red-900/20",      icon: AlertCircle },
+                  { label: "Congés",    value: selectedStat.conges,   color: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-900/20",    icon: Calendar },
+                ].map(s => (
+                  <div key={s.label} className={`rounded-lg p-3 ${s.bg} flex flex-col items-center gap-1`}>
+                    <s.icon className={`h-4 w-4 ${s.color}`} />
+                    <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+                    <p className="text-xs text-muted-foreground">{s.label}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Taux de présence */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Taux de présence</span>
+                  <span className="font-semibold">
+                    {selectedStat.tauxPresence ?? tauxPresence(selectedStat.presents, selectedStat.total)}%
+                  </span>
+                </div>
+                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                  <div
+                    className="bg-green-500 h-2 rounded-full transition-all"
+                    style={{ width: `${selectedStat.tauxPresence ?? tauxPresence(selectedStat.presents, selectedStat.total)}%` }}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {selectedStat.total} jour{selectedStat.total > 1 ? "s" : ""} sur la période
+                </p>
+              </div>
+
+              <Separator />
+
+              {/* Tableau des présences détaillées */}
+              <div className="space-y-2">
+                <h3 className="text-sm font-semibold">Présences sur la période</h3>
+                {loadingPresences ? (
+                  <div className="flex items-center justify-center py-8 gap-2 text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span className="text-sm">Chargement…</span>
+                  </div>
+                ) : employeePresences.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-4 text-center">Aucun enregistrement détaillé disponible.</p>
+                ) : (
+                  <div className="rounded-md border overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="text-xs">Date</TableHead>
+                          <TableHead className="text-xs">Entrée</TableHead>
+                          <TableHead className="text-xs">Sortie</TableHead>
+                          <TableHead className="text-xs">Statut</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {employeePresences.map(p => {
+                          const s = STATUT_LABELS[p.statut] ?? { label: p.statut, color: "text-gray-500" }
+                          return (
+                            <TableRow key={p._id}>
+                              <TableCell className="text-xs py-2">{formatDate(p.date)}</TableCell>
+                              <TableCell className="text-xs py-2">{formatTime(p.heureEntree)}</TableCell>
+                              <TableCell className="text-xs py-2">{formatTime(p.heureSortie)}</TableCell>
+                              <TableCell className="py-2">
+                                <span className={`text-xs font-medium ${s.color}`}>{s.label}</span>
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </div>
+
+              {/* Bouton export */}
+              <div className="flex justify-end pt-2">
+                <Button
+                  onClick={() => exportEmployeeExcel(selectedStat, employeePresences)}
+                  className="gap-2 bg-green-600 hover:bg-green-700 text-white"
+                  disabled={loadingPresences}
+                >
+                  <Download className="h-4 w-4" />
+                  Exporter en Excel
+                </Button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

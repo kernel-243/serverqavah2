@@ -485,20 +485,23 @@ export function NewFactureDialog({ open, onOpenChange, onFactureAdded }: NewFact
     } catch (error) {
       console.error("Error saving paiement:", error)
       if (axios.isAxiosError(error)) {
-        if (error.response?.status === 401) {
+        const response = error.response
+        const status = response?.status
+
+        if (status === 401) {
           toast.error("Votre session a expiré. Veuillez vous reconnecter.", { id: toastId });
-        } else if (error.response?.status === 403) {
+        } else if (status === 403) {
           setShowDialogError(true)
           setErrorDialogMessage("Vous n'avez pas la permission. Veuillez contacter votre administrateur!.")
           toast.error("Vous n'avez pas la permission. Veuillez contacter votre administrateur.", { id: toastId });
-        } else if (error.response?.status === 400) {
-          const errorMessage = error.response.data?.message || error.response.data?.error || "Une erreur s'est produite lors de la création du paiement."
+        } else if (status === 400) {
+          const errorMessage = response?.data?.message || response?.data?.error || "Une erreur s'est produite lors de la création du paiement."
           setShowDialogError(true)
           setErrorDialogMessage(errorMessage)
           toast.error(errorMessage, { id: toastId });
-        } else if (error.response?.status === 404) {
+        } else if (status === 404) {
           toast.error("La ressource demandée n'a pas été trouvée.", { id: toastId });
-        } else if (error.response?.status >= 500) {
+        } else if (typeof status === "number" && status >= 500) {
           toast.error("Erreur serveur. Veuillez réessayer plus tard.", { id: toastId });
         } else {
           const errorMessage = error.response?.data?.message || error.response?.data?.error || "Erreur lors de la création du paiement. Veuillez réessayer."
@@ -1234,7 +1237,7 @@ export function NewFactureDialog({ open, onOpenChange, onFactureAdded }: NewFact
                     const docTypeId = doc.typeDocumentId?._id || doc.typeDocumentId
                     return docTypeId === selectedCadastralType
                   }).length === 0)) ||
-                  (contratType === "cadastral_payment" && selectedCadastralDocument?.isPaymentComplete)
+                  (contratType === "cadastral_payment" && selectedCadastralTypeInfo?.isComplete)
                 }
                 className="border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800 dark:text-gray-200"
               >
@@ -1253,7 +1256,8 @@ export function NewFactureDialog({ open, onOpenChange, onFactureAdded }: NewFact
               <Button
                 type="submit"
                 disabled={isSubmitting}
-                className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+           
               >
                 {isSubmitting ? (
                   <>
@@ -1261,7 +1265,7 @@ export function NewFactureDialog({ open, onOpenChange, onFactureAdded }: NewFact
                     Vérification...
                   </>
                 ) : (
-                  "S'admettre"
+                  "Soumettre la facture"
                 )}
               </Button>
             </DialogFooter>

@@ -40,7 +40,7 @@ interface TpDocument {
   fichier?: string | null
   originalName?: string | null
   mimeType?: string | null
-  type: "jeton_attribution" | "demande_terre" | "procuration" | "autre"
+  type: "jeton_attribution" | "demande_terre" | "contrat_location" | "procuration" | "autre"
   statut:
     | "non_debute"
     | "dossier_depose"
@@ -109,8 +109,7 @@ interface TpClientDetail {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DOC_PRESETS = [
-  { value: "jeton_attribution", label: "Jeton d'attribution", type: "jeton_attribution" as const },
-  { value: "demande_terre",     label: "Demande de terre",    type: "demande_terre" as const },
+  { value: "contrat_location",  label: "Contrat de location",  type: "contrat_location" as const },
   { value: "procuration",       label: "Procuration",         type: "procuration" as const },
   { value: "autre",             label: "Autre…",              type: "autre" as const },
 ]
@@ -257,7 +256,7 @@ A défaut de retour de notre part dans un délai d'environ trois mois, nous vous
 
 Nous restons pleinement disponibles pour toute information complémentaire et vous remercions pour votre confiance.
 
-Heureuse fête de Pâques.
+Nous vous souhaitons une excellente journée.
 
 Bien cordialement,
 L'équipe Qavah Group`,
@@ -270,7 +269,7 @@ L'équipe Qavah Group`,
           <p>Nous tenons à vous rassurer quant au suivi rigoureux de votre dossier. Dans l'éventualité où une évolution nécessiterait votre attention ou une action de votre part, nous ne manquerons pas de revenir vers vous dans les meilleurs délais.</p>
           <p>A défaut de retour de notre part dans un délai d'environ trois mois, nous vous invitons à considérer que votre dossier suit son cours normal.</p>
           <p>Nous restons pleinement disponibles pour toute information complémentaire et vous remercions pour votre confiance.</p>
-          <p>Heureuse fête de Pâques.</p>
+          <p>Nous vous souhaitons une excellente journée.</p>
           <p>Bien cordialement,<br/>L'équipe Qavah Group</p>
         </div>
       `,
@@ -621,7 +620,7 @@ function DocDialog({
   editDoc?: TpDocument | null
   lockType?: boolean
 }) {
-  const [preset, setPreset] = useState("jeton_attribution")
+  const [preset, setPreset] = useState("contrat_location")
   const [customTitle, setCustomTitle] = useState("")
   const [statut, setStatut] = useState("non_debute")
   const [files, setFiles] = useState<File[]>([])
@@ -641,7 +640,7 @@ function DocDialog({
       setDateDepot(toInputDate(editDoc.dateDepot))
       setDateRetrait(toInputDate(editDoc.dateRetrait))
     } else {
-      setPreset(initialType || "jeton_attribution")
+      setPreset(initialType || "contrat_location")
       setCustomTitle("")
       setStatut("non_debute")
       setDateDepot("")
@@ -675,10 +674,6 @@ function DocDialog({
   }
 
   const handleSubmit = () => {
-    if (!isEditMode && files.length === 0) {
-      toast.error("Sélectionnez au moins un fichier")
-      return
-    }
     if (!resolvedTitle && (isEditMode || files.length <= 1)) {
       toast.error(isAutre ? "Saisissez un titre" : "Sélectionnez un type")
       return
@@ -814,9 +809,14 @@ function DocDialog({
             {files.length > 0 && (
               <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
                 {files.map((f, i) => (
-                  <div key={i} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+                  <div key={i} className="flex min-w-0 items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
                     <FileCheck className="h-4 w-4 text-[#896137] shrink-0" />
-                    <span className="text-xs text-gray-700 dark:text-gray-200 truncate flex-1">{f.name}</span>
+                    <span
+                      className="min-w-0 flex-1 truncate text-xs text-gray-700 dark:text-gray-200"
+                      title={f.name}
+                    >
+                      {f.name}
+                    </span>
                     <span className="text-xs text-gray-400 shrink-0">{(f.size / 1024).toFixed(0)} Ko</span>
                     <button
                       type="button"
@@ -1007,7 +1007,13 @@ function DocumentSection({
   onAdd: (type: string, lockType: boolean) => void
   allowMultiple?: boolean; lockTypeInDialog?: boolean
 }) {
-  const sectionDocs = docs.filter(d => d.type === docType)
+  const sectionDocs = docs.filter((d) => {
+    if (docType === "contrat_location") {
+      // Backward compatibility: old records split across two former types.
+      return d.type === "contrat_location" || d.type === "jeton_attribution" || d.type === "demande_terre"
+    }
+    return d.type === docType
+  })
   const canAdd = allowMultiple || sectionDocs.length === 0
   return (
     <div className="space-y-3">
@@ -1176,6 +1182,13 @@ export default function TpClientDetailPage() {
   }
 
   const handleDocSave = async (form: DocFormState) => {
+    const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20 MB
+    const oversized = [...form.files, ...(form.file ? [form.file] : [])].find(f => f.size > MAX_FILE_SIZE)
+    if (oversized) {
+      toast.error(`Le fichier "${oversized.name}" dépasse la taille maximale autorisée (20 Mo).`)
+      return
+    }
+
     setSavingDoc(true)
     try {
       const normalizedStatut = normalizeDocStatus(form.statut)
@@ -1241,11 +1254,21 @@ export default function TpClientDetailPage() {
         ? `${process.env.NEXT_PUBLIC_API_URL}/tp-clients/${id}/documents/${editingDoc._id}`
         : `${process.env.NEXT_PUBLIC_API_URL}/tp-clients/${id}/documents`
 
-      await fetch(url, {
+      const res = await fetch(url, {
         method: editingDoc ? "PUT" : "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: fd,
       })
+
+      if (res.status === 413) {
+        toast.error("Le fichier est trop volumineux pour le serveur (max 20 Mo).")
+        return
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        toast.error(body?.error || "Erreur lors de l'enregistrement du document")
+        return
+      }
 
       toast.success(editingDoc ? "Document mis à jour" : "Document ajouté")
       if (form.notifyClient && data?.tpClient?.clientId?.email) {
@@ -1445,24 +1468,10 @@ export default function TpClientDetailPage() {
           {showKinshasaDocs && (
             <>
               <DocumentSection
-                title="Jeton d'attribution"
+                title="Contrat de location"
                 icon={Stamp}
-                description="Document officiel d'attribution du terrain (Kinshasa)"
-                docType="jeton_attribution"
-                docs={docs} tpId={id}
-                onPreview={d => { setPreviewDoc(d); setPreviewOpen(true) }}
-                onEdit={openEditDoc}
-                onDelete={d => { setDeletingDoc(d); setDeleteDocOpen(true) }}
-                onDownload={handleDownloadDoc}
-                onAdd={openAddDoc}
-                lockTypeInDialog
-              />
-              <div className="border-t dark:border-gray-700" />
-              <DocumentSection
-                title="Demande de terre"
-                icon={FileCheck}
-                description="Formulaire de demande de terrain (Kinshasa)"
-                docType="demande_terre"
+                description="Document de contrat de location du terrain (Kinshasa)"
+                docType="contrat_location"
                 docs={docs} tpId={id}
                 onPreview={d => { setPreviewDoc(d); setPreviewOpen(true) }}
                 onEdit={openEditDoc}

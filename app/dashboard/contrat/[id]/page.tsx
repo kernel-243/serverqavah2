@@ -83,9 +83,14 @@ interface ContractDetails {
     uploadedBy: string
   }[],
   contrat: {
-    path: string,
-    dateUpload: String,
-    uploadedBy: string
+    statut?: "en_attente" | "en_cours" | "termine"
+    fichier?: string
+    originalName?: string
+    mimeType?: string
+    addBy?: string
+    path?: string
+    dateUpload?: string
+    uploadedBy?: string
   },
   planEcholon: {
     path: string,
@@ -562,6 +567,14 @@ export default function ContractDetailsPage() {
       </div>
     )
   }
+
+  const hasContractFile = !!(contract.contrat?.fichier || contract.contrat?.path)
+  const contractDisplayName =
+    contract.contrat?.originalName ||
+    contract.contrat?.fichier ||
+    contract.contrat?.path?.split('/').pop() ||
+    "—"
+  const contractUploadedDate = contract.contrat?.dateUpload?.split('T')[0] || "—"
 
   const totalPaid = contract.total - contract.remainingBalance
   const paymentProgress = (totalPaid / contract.total) * 100
@@ -1618,7 +1631,7 @@ export default function ContractDetailsPage() {
                     <Icons.fileText className="h-4 w-4 text-blue-600 dark:text-blue-400" />
                     Contrat
                   </h3>
-                  {!contract.contrat && (
+                  {!hasContractFile && (
                     <Button 
                       onClick={handleUploadContract}
                       className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg"
@@ -1629,7 +1642,7 @@ export default function ContractDetailsPage() {
                   )}
                 </div>
                 
-                {contract.contrat ? (
+                {hasContractFile ? (
                   <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
@@ -1637,8 +1650,8 @@ export default function ContractDetailsPage() {
                           <Icons.fileText className="h-5 w-5 text-red-600 dark:text-red-400" />
                         </div>
                         <div>
-                          <p className="font-medium text-gray-900 dark:text-gray-100">{contract.contrat?.path?.split('/').pop() ?? '—'}</p>
-                          <p className="text-sm text-gray-600 dark:text-gray-400">Ajouté le {contract.contrat?.dateUpload?.split('T')[0] ?? '—'}</p>
+                          <p className="font-medium text-gray-900 dark:text-gray-100">{contractDisplayName}</p>
+                          <p className="text-sm text-gray-600 dark:text-gray-400">Ajouté le {contractUploadedDate}</p>
                         </div>
                       </div>
                       <div className="flex gap-2">
